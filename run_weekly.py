@@ -338,6 +338,11 @@ def main():
         append_trades(trades)
     print(f"本週交易 {len(trades)} 筆")
 
+    # 報告顯示「今天全部的交易」:同一天重跑時才不會把先前的交易紀錄洗掉
+    if os.path.exists(TRADES_PATH):
+        tdf = pd.read_csv(TRADES_PATH, encoding="utf-8-sig", dtype={"日期": str})
+        trades = tdf[tdf["日期"] == today].fillna("").to_dict("records")
+
     mkt = market_view(bench)
     sectors = sector_summary(prices)
     report, nav = build_report(p, trades, scores, filter_on, mkt, sectors, px, today)
