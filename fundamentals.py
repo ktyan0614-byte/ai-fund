@@ -64,6 +64,7 @@ def revenue_yoy_table(rev: pd.DataFrame, smooth=3) -> pd.DataFrame:
             ["revenue_year", "revenue_month"])
         yoy = g["revenue"].values / pd.Series(g["revenue"]).shift(12).values - 1
         s = pd.Series(yoy, index=g["avail_date"].values)
+        s = s.replace([float("inf"), float("-inf")], float("nan"))  # 單月營收為 0 時
         out[t] = s.rolling(smooth).mean()
     table = pd.DataFrame(out).sort_index()
     return table
