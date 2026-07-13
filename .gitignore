@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+# 股價快取(每次執行會重新下載,不需進版控)
+outputs/backtest_Open.csv
+outputs/backtest_High.csv
+outputs/backtest_Low.csv
+outputs/backtest_Close.csv
+outputs/backtest_prices.csv

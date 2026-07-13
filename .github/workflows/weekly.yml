@@ -1,0 +1,34 @@
+name: AI 投資公司每週執行
+
+on:
+  schedule:
+    # 每週五台北時間 15:00(= UTC 07:00),台股收盤後執行
+    - cron: "0 7 * * 5"
+  workflow_dispatch: {}   # 也可以手動觸發
+
+permissions:
+  contents: write
+
+jobs:
+  weekly-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安裝套件
+        run: pip install -r requirements.txt
+
+      - name: 執行每週決策與週報
+        run: python run_weekly.py
+
+      - name: 提交結果回 repo
+        run: |
+          git config user.name "ai-fund-bot"
+          git config user.email "actions@github.com"
+          git add portfolio/ reports/
+          git diff --cached --quiet || git commit -m "週報 $(date +%Y-%m-%d)"
+          git push
