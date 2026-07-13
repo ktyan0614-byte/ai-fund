@@ -6,3 +6,4 @@ outputs/backtest_High.csv
 outputs/backtest_Low.csv
 outputs/backtest_Close.csv
 outputs/backtest_prices.csv
+outputs/month_revenue.csv

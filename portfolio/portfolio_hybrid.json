@@ -1,0 +1,34 @@
+{
+  "inception": "2026-07-13",
+  "as_of": "2026-07-13",
+  "cash": 1010.74,
+  "positions": {
+    "2882.TW": {
+      "shares": 206,
+      "avg_cost": 96.7
+    },
+    "2327.TW": {
+      "shares": 24,
+      "avg_cost": 816.0
+    },
+    "2382.TW": {
+      "shares": 52,
+      "avg_cost": 378.0
+    },
+    "2376.TW": {
+      "shares": 59,
+      "avg_cost": 335.5
+    },
+    "2891.TW": {
+      "shares": 300,
+      "avg_cost": 66.5
+    }
+  },
+  "nav_history": [
+    {
+      "date": "2026-07-13",
+      "nav": 99915.44,
+      "bench": 106.0
+    }
+  ]
+}

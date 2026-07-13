@@ -140,9 +140,27 @@ def main():
             return []
         return [config.BENCHMARK] if s.iloc[-20:].mean() > s.iloc[-60:].mean() else []
 
+    # 基本面資料:月營收年增率(point-in-time,只用決策日前已公佈的)
+    from fundamentals import fetch_month_revenue, revenue_yoy_table, yoy_asof
+    rev = fetch_month_revenue(list(config.UNIVERSE), cache_name="month_revenue.csv")
+    yoy_table = revenue_yoy_table(rev)
+
+    def decide_E(asof):   # 動能+營收 50/50 混合 + 濾網
+        return strategy.combined_targets(prices, bench, yoy_table, asof)
+
+    def decide_F(asof):   # 動能 Top5,但只買營收年增率 > 0 的 + 濾網
+        if not strategy.market_ok(bench, asof):
+            return []
+        mom = strategy.momentum_scores(prices, asof)
+        mom = mom[mom > 0]
+        yoy = yoy_asof(yoy_table, asof)
+        growing = [t for t in mom.index if yoy.get(t, -1) > 0]
+        return growing[:config.TOP_N]
+
     navs = {}
     for name, fn in [("A_持有0050", decide_A), ("B_動能Top5", decide_B),
-                     ("C_動能+濾網", decide_C), ("D_0050均線", decide_D)]:
+                     ("C_動能+濾網", decide_C), ("D_0050均線", decide_D),
+                     ("E_動能+營收混合", decide_E), ("F_動能+營收門檻", decide_F)]:
         print(f"回測 {name} ...")
         navs[name] = simulate(prices_all, bench, fn)
 

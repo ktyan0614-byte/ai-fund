@@ -41,3 +41,36 @@ def target_holdings(prices: pd.DataFrame, bench: pd.Series, asof=None,
     # 只買動能為正的股票:就算排前五,若本身在下跌也不買
     scores = scores[scores > 0]
     return list(scores.head(top_n).index)
+
+
+def combined_scores(prices: pd.DataFrame, yoy_table: pd.DataFrame,
+                    asof=None, mom_weight=0.5) -> pd.Series:
+    """動能 + 月營收年增率的綜合分數(兩者的百分位排名加權平均)。
+
+    白話:一半看「股價最近漲多強」,一半看「公司生意最近成長多快」。
+    兩個訊號來源獨立(價格 vs 財報),同時強的股票假象機率較低。
+    """
+    mom = momentum_scores(prices, asof)
+    mom = mom[mom > 0]
+    if mom.empty:
+        return pd.Series(dtype=float)
+    ref_date = asof if asof is not None else prices.index[-1]
+    from fundamentals import yoy_asof
+    yoy = yoy_asof(yoy_table, ref_date)
+    common = mom.index.intersection(yoy.index)
+    if len(common) == 0:
+        return mom          # 沒有營收資料時退回純動能
+    m_rank = mom[common].rank(pct=True)
+    f_rank = yoy[common].rank(pct=True)
+    combo = mom_weight * m_rank + (1 - mom_weight) * f_rank
+    return combo.sort_values(ascending=False)
+
+
+def combined_targets(prices: pd.DataFrame, bench: pd.Series,
+                     yoy_table: pd.DataFrame, asof=None, top_n=None) -> list:
+    """動能+營收混合策略的目標持股(同樣受大盤濾網管控)。"""
+    top_n = top_n or config.TOP_N
+    if not market_ok(bench, asof):
+        return []
+    combo = combined_scores(prices, yoy_table, asof)
+    return list(combo.head(top_n).index)
