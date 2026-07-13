@@ -7,3 +7,6 @@ outputs/backtest_Low.csv
 outputs/backtest_Close.csv
 outputs/backtest_prices.csv
 outputs/month_revenue.csv
+outputs/long_prices.csv
+outputs/month_revenue_long.csv
+outputs/tlt_twd.csv
