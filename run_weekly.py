@@ -31,6 +31,9 @@ ACCOUNTS = [
     {"key": "hybrid", "name": "帳戶二:動能+營收",
      "pf": "portfolio_hybrid.json", "trades": "trades_hybrid.csv",
      "desc": "動能與月營收年增率各半的綜合排名前 5 名,等權重"},
+    {"key": "margin", "name": "帳戶三:動能+毛利",
+     "pf": "portfolio_margin.json", "trades": "trades_margin.csv",
+     "desc": "動能與毛利率年變化各半的綜合排名前 5 名,等權重"},
 ]
 
 
@@ -261,9 +264,20 @@ def main():
         yoy_table = revenue_yoy_table(rev)
         yoy_now = yoy_table.ffill().iloc[-1]
     except Exception as e:                      # API 掛掉時退回純動能,不中斷
-        print(f"警告:月營收下載失敗({e}),混合帳戶本週退回純動能訊號")
+        print(f"警告:月營收下載失敗({e}),帳戶二本週退回純動能訊號")
         yoy_table = pd.DataFrame()
         yoy_now = pd.Series(dtype=float)
+
+    print("下載季報資料(毛利率)...")
+    try:
+        from fundamentals import fetch_financials, margin_trend_table
+        fin = fetch_financials(list(config.UNIVERSE), start="2023-01-01")
+        gm_table = margin_trend_table(fin)
+        gm_now = gm_table.ffill().iloc[-1]
+    except Exception as e:
+        print(f"警告:季報下載失敗({e}),帳戶三本週退回純動能訊號")
+        gm_table = pd.DataFrame()
+        gm_now = pd.Series(dtype=float)
 
     filter_on = strategy.market_ok(bench)
     mom_scores = strategy.momentum_scores(prices)
@@ -297,25 +311,29 @@ def main():
                 ranking.append(f"|{i}|{zh_name(t)}({t.replace('.TW','')}){star}"
                                f"|{config.UNIVERSE[t][1]}|{sc:+.1%}|")
         else:
-            targets = (strategy.combined_targets(prices, bench, yoy_table)
-                       if not yoy_table.empty and filter_on else
+            table, now_vals, label = (
+                (yoy_table, yoy_now, "營收年增率(近3月均)")
+                if acct["key"] == "hybrid" else
+                (gm_table, gm_now, "毛利率年變化"))
+            targets = (strategy.combined_targets(prices, bench, table)
+                       if not table.empty and filter_on else
                        (strategy.target_holdings(prices, bench) if filter_on else []))
-            scores = strategy.combined_scores(prices, yoy_table) \
-                if not yoy_table.empty else mom_scores
+            scores = strategy.combined_scores(prices, table) \
+                if not table.empty else mom_scores
 
-            def reason_fn(t, s=scores, m=mom_scores, y=yoy_now):
+            def reason_fn(t, s=scores, m=mom_scores, y=now_vals, lb=label):
                 r = list(s.index).index(t) + 1
                 return (f"綜合排名第 {r}(動能 {m.get(t, float('nan')):+.1%},"
-                        f"營收年增 {y.get(t, float('nan')):+.1%})")
+                        f"{lb} {y.get(t, float('nan')):+.1%})")
 
-            ranking = ["|排名|股票|產業|近60日報酬|營收年增率(近3月均)|",
+            ranking = [f"|排名|股票|產業|近60日報酬|{label}|",
                        "|---|---|---|---|---|"]
             for i, t in enumerate(scores.head(10).index, 1):
                 star = " ★持有" if t in p["positions"] or t in targets else ""
                 ranking.append(f"|{i}|{zh_name(t)}({t.replace('.TW','')}){star}"
                                f"|{config.UNIVERSE[t][1]}"
                                f"|{mom_scores.get(t, float('nan')):+.1%}"
-                               f"|{yoy_now.get(t, float('nan')):+.1%}|")
+                               f"|{now_vals.get(t, float('nan')):+.1%}|")
 
         targets = [t for t in targets if not np.isnan(px.get(t, np.nan))]
         print(f"{acct['name']} 目標: {[zh_name(t) for t in targets] or '無(現金)'}")

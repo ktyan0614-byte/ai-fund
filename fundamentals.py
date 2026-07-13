@@ -76,3 +76,75 @@ def yoy_asof(table: pd.DataFrame, asof) -> pd.Series:
     if avail.empty:
         return pd.Series(dtype=float)
     return avail.ffill().iloc[-1].dropna()
+
+
+# ---------- 季報(毛利率、獲利) ----------
+
+FIN_TYPES = {"Revenue", "GrossProfit", "IncomeAfterTaxes"}
+
+# 台股季報法定公佈期限:Q1→5/15、Q2→8/14、Q3→11/14、Q4(年報)→次年 3/31
+_PUB_DEADLINE = {3: ("05-15", 0), 6: ("08-14", 0), 9: ("11-14", 0), 12: ("03-31", 1)}
+
+
+def _pub_date(qend: pd.Timestamp) -> pd.Timestamp:
+    mmdd, year_add = _PUB_DEADLINE[qend.month]
+    return pd.Timestamp(f"{qend.year + year_add}-{mmdd}")
+
+
+def fetch_financials(tickers, start="2005-01-01", cache_name=None):
+    """抓季報損益表關鍵科目,回傳 long DataFrame(含保守的法定公佈日 avail_date)。"""
+    if cache_name:
+        cache_path = os.path.join(CACHE_DIR, cache_name)
+        if os.path.exists(cache_path):
+            return pd.read_csv(cache_path, parse_dates=["qend", "avail_date"])
+
+    frames = []
+    for t in tickers:
+        sid = t.replace(".TW", "")
+        r = requests.get(API, params={"dataset": "TaiwanStockFinancialStatements",
+                                      "data_id": sid, "start_date": start},
+                         timeout=60)
+        r.raise_for_status()
+        data = [row for row in r.json().get("data", []) if row["type"] in FIN_TYPES]
+        if data:
+            df = pd.DataFrame(data).pivot_table(index="date", columns="type",
+                                                values="value", aggfunc="first")
+            df["ticker"] = t
+            frames.append(df.reset_index())
+        time.sleep(0.4)
+    fin = pd.concat(frames, ignore_index=True)
+    fin["qend"] = pd.to_datetime(fin["date"])
+    fin["avail_date"] = fin["qend"].map(_pub_date)
+    fin = fin.drop(columns=["date"])
+
+    if cache_name:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        fin.to_csv(os.path.join(CACHE_DIR, cache_name), index=False)
+    return fin
+
+
+def margin_trend_table(fin: pd.DataFrame) -> pd.DataFrame:
+    """毛利率趨勢:本季毛利率 − 去年同季毛利率(百分點)。
+
+    跟「去年同季」比而非上一季,避開淡旺季;比「變化量」而非水準,
+    因為不同產業的毛利率水準天生不同(IC 設計 50% vs 代工 15%),
+    但「毛利率在變好」對哪個產業都是好消息。
+    """
+    out = {}
+    for t, g in fin.groupby("ticker"):
+        g = g.sort_values("qend").drop_duplicates("qend")
+        gm = g["GrossProfit"] / g["Revenue"]
+        trend = gm.values - pd.Series(gm).shift(4).values
+        out[t] = pd.Series(trend, index=g["avail_date"].values)
+    return pd.DataFrame(out).sort_index()
+
+
+def profitable_table(fin: pd.DataFrame) -> pd.DataFrame:
+    """獲利門檻用:近四季稅後淨利合計(數值;NaN 表示資料不足,呼叫端應視為通過,
+    只有明確知道虧損時才過濾——缺資料不等於壞公司)。"""
+    out = {}
+    for t, g in fin.groupby("ticker"):
+        g = g.sort_values("qend").drop_duplicates("qend")
+        ttm = pd.Series(g["IncomeAfterTaxes"].values).rolling(4).sum()
+        out[t] = pd.Series(ttm.values, index=g["avail_date"].values)
+    return pd.DataFrame(out).sort_index()
