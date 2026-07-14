@@ -10,3 +10,5 @@ outputs/month_revenue.csv
 outputs/long_prices.csv
 outputs/month_revenue_long.csv
 outputs/tlt_twd.csv
+# 私人文件(不進公開 repo)
+private/
