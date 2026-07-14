@@ -34,11 +34,18 @@ ACCOUNTS = [
     {"key": "margin", "name": "帳戶三:動能+毛利",
      "pf": "portfolio_margin.json", "trades": "trades_margin.csv",
      "desc": "動能與毛利率年變化各半的綜合排名前 5 名,等權重"},
+    {"key": "us_etf", "name": "帳戶四:美股ETF",
+     "pf": "portfolio_us.json", "trades": "trades_us.csv",
+     "desc": "SPY 50%/QQQ 30%/VIG 20% 被動持有(台幣計價),偏離目標逾 5 個百分點才再平衡"},
 ]
 
 
 def zh_name(t):
-    return config.UNIVERSE.get(t, (config.BENCHMARK_NAME, ""))[0]
+    if t in config.UNIVERSE:
+        return config.UNIVERSE[t][0]
+    if t in config.US_ETF_PORTFOLIO:
+        return config.US_ETF_PORTFOLIO[t][0]
+    return config.BENCHMARK_NAME
 
 
 def pf_path(acct):
@@ -80,23 +87,28 @@ def todays_trades(acct, today):
     return tdf[tdf["日期"] == today].fillna("").to_dict("records")
 
 
-def trade_cost(value, is_sell):
+def trade_cost(value, is_sell, ticker=""):
+    if ticker and not ticker.endswith(".TW"):     # 海外 ETF:低費率、無證交稅
+        return round(value * config.US_FEE_RATE, 2)
     fee = max(config.MIN_FEE, value * config.FEE_RATE)
     tax = value * config.TAX_RATE if is_sell else 0.0
     return round(fee + tax, 2)
 
 
-def rebalance(p, px, targets, reason_fn, today):
-    """把帳戶調整到目標持股(等權重),回傳交易紀錄清單。"""
+def rebalance(p, px, targets, reason_fn, today, weights=None):
+    """把帳戶調整到目標持股。weights=None 時等權重;台股整數股,海外 ETF 可碎股。"""
     trades = []
     pos = p["positions"]
+
+    def w(t):
+        return weights[t] if weights else 1 / len(targets)
 
     # 1. 賣出不在目標內的持股
     for t in list(pos):
         if t not in targets and pos[t]["shares"] > 0 and not np.isnan(px[t]):
             n = pos[t]["shares"]
             value = n * px[t]
-            cost = trade_cost(value, is_sell=True)
+            cost = trade_cost(value, is_sell=True, ticker=t)
             p["cash"] += value - cost
             pnl = (px[t] - pos[t]["avg_cost"]) * n
             reason = "跌出排名前五,汰弱換強" if targets else "大盤跌破均線濾網,轉為現金避險"
@@ -106,19 +118,24 @@ def rebalance(p, px, targets, reason_fn, today):
                            "損益": round(pnl, 0), "原因": reason})
             del pos[t]
 
-    # 2. 買進 / 加碼到等權重
+    # 2. 買進 / 加碼 / 減碼到目標配置
     if targets:
         nav_now = p["cash"] + sum(v["shares"] * px[t] for t, v in pos.items())
-        per_stock = nav_now / len(targets)
         for t in targets:
+            frac = not t.endswith(".TW")          # 海外 ETF 允許碎股
+            target_val = nav_now * w(t)
             cur_val = pos.get(t, {}).get("shares", 0) * px[t]
-            diff = per_stock - cur_val
-            if diff > px[t]:
-                affordable = int(p["cash"] / (px[t] * (1 + config.FEE_RATE)))
-                buy_n = min(int(diff // px[t]), affordable)
+            diff = target_val - cur_val
+            min_trade = px[t] * (0.001 if frac else 1)
+            if diff > min_trade:                  # 買進/加碼
+                if frac:
+                    buy_n = round(min(diff, p["cash"] / (1 + config.US_FEE_RATE)) / px[t], 4)
+                else:
+                    affordable = int(p["cash"] / (px[t] * (1 + config.FEE_RATE)))
+                    buy_n = min(int(diff // px[t]), affordable)
                 if buy_n > 0:
                     value = buy_n * px[t]
-                    cost = trade_cost(value, is_sell=False)
+                    cost = trade_cost(value, is_sell=False, ticker=t)
                     old = pos.get(t, {"shares": 0, "avg_cost": 0.0})
                     new_shares = old["shares"] + buy_n
                     new_cost = (old["shares"] * old["avg_cost"] + value) / new_shares
@@ -127,6 +144,20 @@ def rebalance(p, px, targets, reason_fn, today):
                     action = "加碼" if old["shares"] else "買進"
                     trades.append({"日期": today, "代號": t, "名稱": zh_name(t),
                                    "動作": action, "股數": buy_n,
+                                   "價格": round(px[t], 2), "金額": round(value, 0),
+                                   "費用稅": cost, "損益": "",
+                                   "原因": reason_fn(t)})
+            elif diff < -min_trade and t in pos:  # 減碼(再平衡賣出一部分)
+                sell_n = (round((-diff) / px[t], 4) if frac
+                          else min(int((-diff) // px[t]), pos[t]["shares"]))
+                sell_n = min(sell_n, pos[t]["shares"])
+                if sell_n > 0:
+                    value = sell_n * px[t]
+                    cost = trade_cost(value, is_sell=True, ticker=t)
+                    p["cash"] += value - cost
+                    pos[t]["shares"] = round(pos[t]["shares"] - sell_n, 4)
+                    trades.append({"日期": today, "代號": t, "名稱": zh_name(t),
+                                   "動作": "減碼", "股數": sell_n,
                                    "價格": round(px[t], 2), "金額": round(value, 0),
                                    "費用稅": cost, "損益": "",
                                    "原因": reason_fn(t)})
@@ -176,7 +207,8 @@ def account_section(acct, p, trades, ranking_lines, px, mkt):
     pos = p["positions"]
     stock_value = sum(v["shares"] * px[t] for t, v in pos.items())
     nav = p["cash"] + stock_value
-    lines = [f"# {acct['name']}", "", f"策略:{acct['desc']} + 大盤濾網", ""]
+    suffix = "" if acct["key"] == "us_etf" else " + 大盤濾網"
+    lines = [f"# {acct['name']}", "", f"策略:{acct['desc']}{suffix}", ""]
 
     # 決策卡
     lines += ["### 📋 決策卡 — 下個交易日的行動指示", ""]
@@ -279,6 +311,22 @@ def main():
         gm_table = pd.DataFrame()
         gm_now = pd.Series(dtype=float)
 
+    print("下載美股 ETF 資料(台幣計價)...")
+    try:
+        import yfinance as yf
+        us_raw = yf.download(list(config.US_ETF_PORTFOLIO) + ["TWD=X"],
+                             start=(pd.Timestamp.now()
+                                    - pd.Timedelta(days=430)).strftime("%Y-%m-%d"),
+                             auto_adjust=True, progress=False)["Close"]
+        fx = us_raw["TWD=X"]
+        fx[fx.pct_change().abs() > 0.15] = np.nan     # 匯率壞點防護
+        us_twd = (us_raw[list(config.US_ETF_PORTFOLIO)]
+                  .mul(fx.ffill(), axis=0).dropna(how="all").ffill())
+    except Exception as e:
+        print(f"警告:美股資料下載失敗({e}),帳戶四本週跳過")
+        us_twd = pd.DataFrame()
+    px_all = pd.concat([px, us_twd.iloc[-1]]) if not us_twd.empty else px
+
     filter_on = strategy.market_ok(bench)
     mom_scores = strategy.momentum_scores(prices)
     print(f"大盤濾網: {'通過(可持股)' if filter_on else '未通過(全現金)'}")
@@ -297,7 +345,38 @@ def main():
             p["inception"] = today
             print(f"{acct['name']}:建立虛擬帳戶,初始資金 {config.INITIAL_CASH:,} 元")
 
-        if acct["key"] == "momentum":
+        hold, weights_map = False, None
+        if acct["key"] == "us_etf":
+            if us_twd.empty:
+                print(f"{acct['name']}:美股資料缺,本週跳過")
+                continue
+            weights_map = {t: w for t, (_, w) in config.US_ETF_PORTFOLIO.items()}
+            pos_now = p["positions"]
+            nav_now = p["cash"] + sum(v["shares"] * px_all[t]
+                                      for t, v in pos_now.items())
+            cur_w = {t: pos_now.get(t, {}).get("shares", 0) * px_all[t] / nav_now
+                     for t in weights_map}
+            is_new = not pos_now
+            need = is_new or any(abs(cur_w[t] - weights_map[t])
+                                 > config.US_REBALANCE_BAND for t in weights_map)
+            targets = list(weights_map)
+            hold = not need
+
+            def reason_fn(t, wm=weights_map, new=is_new):
+                return (f"美股被動配置至目標 {wm[t]:.0%}"
+                        + ("(初始建倉)" if new else "(偏離逾5個百分點,再平衡)"))
+
+            r1y = (us_twd.iloc[-1] / us_twd.iloc[-253] - 1) if len(us_twd) > 253 else None
+            ranking = ["|ETF|目標配置|目前配置|近一年報酬(台幣)|", "|---|---|---|---|"]
+            for t, (name, tw) in config.US_ETF_PORTFOLIO.items():
+                r1 = (f"{r1y[t]:+.1%}" if r1y is not None
+                      and not np.isnan(r1y.get(t, np.nan)) else "—")
+                ranking.append(f"|{name}({t})|{tw:.0%}|{cur_w.get(t, 0):.0%}|{r1}|")
+            ranking += ["", f"再平衡規則:任一 ETF 偏離目標配置逾 "
+                        f"{config.US_REBALANCE_BAND:.0%} 才調整;"
+                        f"本週{'執行再平衡' if need else '無需動作,續抱'}。"
+                        f"此部門不受台股大盤濾網管控(被動長期持有)。"]
+        elif acct["key"] == "momentum":
             targets = strategy.target_holdings(prices, bench)
             scores = mom_scores
 
@@ -335,15 +414,17 @@ def main():
                                f"|{mom_scores.get(t, float('nan')):+.1%}"
                                f"|{now_vals.get(t, float('nan')):+.1%}|")
 
-        targets = [t for t in targets if not np.isnan(px.get(t, np.nan))]
-        print(f"{acct['name']} 目標: {[zh_name(t) for t in targets] or '無(現金)'}")
+        targets = [t for t in targets if not np.isnan(px_all.get(t, np.nan))]
+        print(f"{acct['name']} 目標: {[zh_name(t) for t in targets] or '無(現金)'}"
+              + ("(續抱,無需動作)" if hold else ""))
 
-        new_trades = rebalance(p, px, targets, reason_fn, today)
+        new_trades = [] if hold else rebalance(p, px_all, targets, reason_fn,
+                                               today, weights=weights_map)
         if new_trades:
             append_trades(acct, new_trades)
         trades = todays_trades(acct, today)
 
-        section, nav = account_section(acct, p, trades, ranking, px, mkt)
+        section, nav = account_section(acct, p, trades, ranking, px_all, mkt)
         all_lines += section + ["---", ""]
         navs[acct["name"]] = nav
 

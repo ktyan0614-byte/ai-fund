@@ -1,0 +1,26 @@
+{
+  "inception": "2026-07-15",
+  "as_of": "2026-07-15",
+  "cash": 0.24,
+  "positions": {
+    "SPY": {
+      "shares": 2.068,
+      "avg_cost": 24178.17
+    },
+    "QQQ": {
+      "shares": 1.2944,
+      "avg_cost": 23177.04
+    },
+    "VIG": {
+      "shares": 2.6056,
+      "avg_cost": 7637.03
+    }
+  },
+  "nav_history": [
+    {
+      "date": "2026-07-15",
+      "nav": 99857.86,
+      "bench": 106.0
+    }
+  ]
+}
