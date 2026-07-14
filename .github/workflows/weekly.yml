@@ -25,6 +25,12 @@ jobs:
       - name: 執行每週決策與週報
         run: python run_weekly.py
 
+      - name: 寄送週報 Email(未設定密鑰時自動跳過)
+        env:
+          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+          MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
+        run: python scripts/send_report.py
+
       - name: 提交結果回 repo
         run: |
           git config user.name "ai-fund-bot"
