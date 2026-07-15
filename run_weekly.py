@@ -45,7 +45,11 @@ def zh_name(t):
         return config.UNIVERSE[t][0]
     if t in config.US_ETF_PORTFOLIO:
         return config.US_ETF_PORTFOLIO[t][0]
-    return config.BENCHMARK_NAME
+    if t in config.DEFAULT_UNIVERSE:      # 已被移出名單、但仍持有/曾持有的股票
+        return config.DEFAULT_UNIVERSE[t][0]
+    if t == config.BENCHMARK:
+        return config.BENCHMARK_NAME
+    return t.replace(".TW", "")
 
 
 def pf_path(acct):
@@ -103,17 +107,18 @@ def rebalance(p, px, targets, reason_fn, today, weights=None):
     def w(t):
         return weights[t] if weights else 1 / len(targets)
 
-    # 1. 賣出不在目標內的持股
+    # 1. 賣出不在目標內的持股(px.get:持股不在報價清單時跳過,下週再處理)
     for t in list(pos):
-        if t not in targets and pos[t]["shares"] > 0 and not np.isnan(px[t]):
+        price = px.get(t, np.nan)
+        if t not in targets and pos[t]["shares"] > 0 and not np.isnan(price):
             n = pos[t]["shares"]
-            value = n * px[t]
+            value = n * price
             cost = trade_cost(value, is_sell=True, ticker=t)
             p["cash"] += value - cost
-            pnl = (px[t] - pos[t]["avg_cost"]) * n
+            pnl = (price - pos[t]["avg_cost"]) * n
             reason = "跌出排名前五,汰弱換強" if targets else "大盤跌破均線濾網,轉為現金避險"
             trades.append({"日期": today, "代號": t, "名稱": zh_name(t),
-                           "動作": "賣出", "股數": n, "價格": round(px[t], 2),
+                           "動作": "賣出", "股數": n, "價格": round(price, 2),
                            "金額": round(value, 0), "費用稅": cost,
                            "損益": round(pnl, 0), "原因": reason})
             del pos[t]
@@ -281,7 +286,14 @@ def main():
     print(f"=== AI 虛擬投資公司 每週執行 {today} ===")
 
     print("下載最新股價...")
-    prices_all = fetch_prices(ALL_TICKERS, start=(pd.Timestamp.now()
+    # 除了投資範圍,也要抓「目前持有」的股票——名單每季換血後,
+    # 被移出的持股仍需要報價才能賣出
+    held_tw = set()
+    for acct in ACCOUNTS:
+        held_tw |= {t for t in load_portfolio(acct)["positions"]
+                    if t.endswith(".TW")}
+    fetch_list = list(dict.fromkeys(ALL_TICKERS + sorted(held_tw)))
+    prices_all = fetch_prices(fetch_list, start=(pd.Timestamp.now()
                               - pd.Timedelta(days=400)).strftime("%Y-%m-%d"))
     prices_all = prices_all.ffill()
     bench = prices_all[config.BENCHMARK]
@@ -325,7 +337,10 @@ def main():
     except Exception as e:
         print(f"警告:美股資料下載失敗({e}),帳戶四本週跳過")
         us_twd = pd.DataFrame()
-    px_all = pd.concat([px, us_twd.iloc[-1]]) if not us_twd.empty else px
+    px_all = px.copy()
+    if not us_twd.empty:
+        for _t, _v in us_twd.iloc[-1].items():   # 逐一併入,避免 pandas 版本差異
+            px_all[_t] = _v
 
     filter_on = strategy.market_ok(bench)
     mom_scores = strategy.momentum_scores(prices)

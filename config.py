@@ -7,7 +7,7 @@ import os as _os
 # 每季由 scripts/update_universe.py 依「市值前30名+流動性門檻」自動更新
 # (寫入 portfolio/universe.json);以下固定名單僅為初始預設/備援。
 # 格式: yfinance 代號: (中文名稱, 產業)
-_DEFAULT_UNIVERSE = {
+DEFAULT_UNIVERSE = {
     "2330.TW": ("台積電", "半導體"),
     "2454.TW": ("聯發科", "半導體"),
     "2303.TW": ("聯電", "半導體"),
@@ -42,7 +42,7 @@ if _os.path.exists(_UNIVERSE_FILE):
     with open(_UNIVERSE_FILE, encoding="utf-8") as _f:
         UNIVERSE = {k: tuple(v) for k, v in _json.load(_f)["universe"].items()}
 else:
-    UNIVERSE = _DEFAULT_UNIVERSE
+    UNIVERSE = DEFAULT_UNIVERSE
 
 BENCHMARK = "0050.TW"          # 比較基準:元大台灣50 ETF
 BENCHMARK_NAME = "元大台灣50 (0050)"
