@@ -12,3 +12,5 @@ outputs/month_revenue_long.csv
 outputs/tlt_twd.csv
 # 私人文件(不進公開 repo)
 private/
+# TEJ 授權資料(嚴禁進公開 repo)
+tej/
