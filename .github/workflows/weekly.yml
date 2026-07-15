@@ -22,6 +22,9 @@ jobs:
       - name: 安裝套件
         run: pip install -r requirements.txt
 
+      - name: 每季更新投資範圍(非換季自動跳過)
+        run: python scripts/update_universe.py
+
       - name: 執行每週決策與週報
         run: python run_weekly.py
 

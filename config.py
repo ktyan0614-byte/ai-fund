@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 """AI 虛擬投資公司 — 全域設定"""
+import json as _json
+import os as _os
 
 # 投資範圍:台股各產業的大型權值股(流動性好、資料完整)
+# 每季由 scripts/update_universe.py 依「市值前30名+流動性門檻」自動更新
+# (寫入 portfolio/universe.json);以下固定名單僅為初始預設/備援。
 # 格式: yfinance 代號: (中文名稱, 產業)
-UNIVERSE = {
+_DEFAULT_UNIVERSE = {
     "2330.TW": ("台積電", "半導體"),
     "2454.TW": ("聯發科", "半導體"),
     "2303.TW": ("聯電", "半導體"),
@@ -31,6 +35,14 @@ UNIVERSE = {
     "2412.TW": ("中華電", "電信"),
     "2207.TW": ("和泰車", "汽車"),
 }
+
+_UNIVERSE_FILE = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                               "portfolio", "universe.json")
+if _os.path.exists(_UNIVERSE_FILE):
+    with open(_UNIVERSE_FILE, encoding="utf-8") as _f:
+        UNIVERSE = {k: tuple(v) for k, v in _json.load(_f)["universe"].items()}
+else:
+    UNIVERSE = _DEFAULT_UNIVERSE
 
 BENCHMARK = "0050.TW"          # 比較基準:元大台灣50 ETF
 BENCHMARK_NAME = "元大台灣50 (0050)"
