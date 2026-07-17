@@ -131,6 +131,11 @@ def rebalance(p, px, targets, reason_fn, today, weights=None):
             target_val = nav_now * w(t)
             cur_val = pos.get(t, {}).get("shares", 0) * px[t]
             diff = target_val - cur_val
+            # 台股已持有者:偏離目標配置未逾 20% 就續抱不動——
+            # 避免為 1~2 股的微調支付最低手續費(費用率可達 0.5% 以上)
+            if (not frac and pos.get(t, {}).get("shares", 0) > 0
+                    and abs(diff) < target_val * 0.20):
+                continue
             min_trade = px[t] * (0.001 if frac else 1)
             if diff > min_trade:                  # 買進/加碼
                 if frac:
