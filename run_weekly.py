@@ -24,15 +24,17 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 REPORT_DIR = os.path.join(BASE, "reports")
 
 ALL_TICKERS = list(config.UNIVERSE) + [config.BENCHMARK]
-RANDOM_N = 10          # 對照組:一次性隨機抽幾檔
+RANDOM_N = 10          # 對照組:一次性盲抽幾檔
+RANDOM_NAMES = {}      # 盲抽股票的中文名(抽籤後填入,供報告顯示)
 
 ACCOUNTS = [
     {"key": "momentum", "name": "帳戶一:純動能",
      "pf": "portfolio.json", "trades": "trades.csv",
      "desc": "近 60 日報酬率前 5 名,等權重"},
-    {"key": "random", "name": "帳戶二:隨機選股(對照組)",
+    {"key": "random", "name": "帳戶二:全市場盲抽(對照組)",
      "pf": "portfolio_random.json", "trades": "trades_random.csv",
-     "desc": "成立時一次性隨機抽 10 檔、等權重、買進持有,永不重抽也不設濾網"
+     "desc": "成立時從全部上市普通股(約 1,100 檔)一次性盲抽 10 檔、等權重、買進持有;"
+             "不設任何市值或流動性篩選,永不重抽也不設濾網"
              "(亂數種子固定並記錄於帳戶檔,任何人可重現)"},
     {"key": "us_etf", "name": "帳戶三:美股ETF",
      "pf": "portfolio_us.json", "trades": "trades_us.csv",
@@ -40,7 +42,26 @@ ACCOUNTS = [
 ]
 
 
+def draw_full_market(today, n=RANDOM_N):
+    """從全部上市普通股盲抽 n 檔。不設市值或流動性篩選——這是刻意的:
+    盲抽的意義就在於不預先排除任何公司,包括小型股與冷門股。
+    回傳 {代號.TW: 名稱},種子為抽籤日,任何人可重現。"""
+    import requests
+    day = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
+                       timeout=60).json()
+    basic = requests.get("https://openapi.twse.com.tw/v1/opendata/t187ap03_L",
+                         timeout=60).json()
+    info = {b["公司代號"]: b["公司簡稱"] for b in basic}
+    pool = {r["Code"]: info[r["Code"]] for r in day
+            if len(r["Code"]) == 4 and r["Code"] in info}
+    seed = int(pd.Timestamp(today).strftime("%Y%m%d"))
+    picks = sorted(random.Random(seed).sample(sorted(pool), n))
+    return {f"{c}.TW": pool[c] for c in picks}, seed, len(pool)
+
+
 def zh_name(t):
+    if t in RANDOM_NAMES:
+        return RANDOM_NAMES[t]
     if t in config.UNIVERSE:
         return config.UNIVERSE[t][0]
     if t in config.US_ETF_PORTFOLIO:
@@ -302,7 +323,22 @@ def main():
     for acct in ACCOUNTS:
         held_tw |= {t for t in load_portfolio(acct)["positions"]
                     if t.endswith(".TW")}
-    fetch_list = list(dict.fromkeys(ALL_TICKERS + sorted(held_tw)))
+
+    # 盲抽帳戶:抽籤必須在抓價格之前,抽中的股票才能被納入報價清單
+    rnd_acct = next(a for a in ACCOUNTS if a["key"] == "random")
+    rp = load_portfolio(rnd_acct)
+    if not rp.get("draw"):
+        names, seed, pool_size = draw_full_market(today)
+        rp.update({"draw": list(names), "names": names, "seed": seed,
+                   "pool_size": pool_size, "draw_date": today,
+                   "inception": rp["inception"] or today})
+        save_portfolio(rnd_acct, rp)
+        print(f"{rnd_acct['name']}:從 {pool_size} 檔上市普通股盲抽(種子 {seed})")
+        for t, n in names.items():
+            print(f"    {t.replace('.TW','')} {n}")
+    RANDOM_NAMES.update(rp.get("names", {}))
+    fetch_list = list(dict.fromkeys(
+        ALL_TICKERS + sorted(held_tw) + list(rp.get("draw", []))))
     prices_all = fetch_prices(fetch_list, start=(pd.Timestamp.now()
                               - pd.Timedelta(days=400)).strftime("%Y-%m-%d"))
     prices_all = prices_all.ffill()
@@ -396,31 +432,30 @@ def main():
                 ranking.append(f"|{i}|{zh_name(t)}({t.replace('.TW','')}){star}"
                                f"|{config.UNIVERSE[t][1]}|{sc:+.1%}|")
         elif acct["key"] == "random":
-            # 對照組:成立時一次性抽籤,之後永不重抽、不設濾網、不再平衡
-            if not p.get("draw"):
-                seed = int(pd.Timestamp(today).strftime("%Y%m%d"))
-                pool = sorted(t for t in config.UNIVERSE
-                              if not np.isnan(px_all.get(t, np.nan)))
-                p["draw"] = sorted(random.Random(seed).sample(pool, RANDOM_N))
-                p["seed"] = seed
-                p["draw_date"] = today
-                print(f"{acct['name']}:一次性抽籤(種子 {seed}) → "
-                      f"{[zh_name(t) for t in p['draw']]}")
+            # 對照組:成立時全市場盲抽,之後永不重抽、不設濾網、不再平衡
             targets = [t for t in p["draw"] if not np.isnan(px_all.get(t, np.nan))]
             hold = bool(p["positions"])          # 已建倉後永遠不動
+            no_px = [t for t in p["draw"] if np.isnan(px_all.get(t, np.nan))]
 
             def reason_fn(t):
-                return f"一次性隨機抽籤選中(種子 {p['seed']},{p['draw_date']} 抽出)"
+                return f"全市場盲抽選中(種子 {p['seed']},{p['draw_date']} 抽出)"
 
-            ranking = ["|抽中的股票|產業|近60日報酬|", "|---|---|---|"]
+            ranking = ["|抽中的股票|現價|成立以來|", "|---|---|---|"]
             for t in p["draw"]:
+                pxv = px_all.get(t, float("nan"))
+                cost = p["positions"].get(t, {}).get("avg_cost")
+                chg = f"{pxv / cost - 1:+.1%}" if cost else "—"
                 ranking.append(f"|{zh_name(t)}({t.replace('.TW','')})"
-                               f"|{config.UNIVERSE.get(t, ('', '—'))[1]}"
-                               f"|{mom_scores.get(t, float('nan')):+.1%}|")
+                               f"|{pxv:.2f}|{chg}|" if not np.isnan(pxv)
+                               else f"|{zh_name(t)}({t.replace('.TW','')})|無報價|—|")
             ranking += ["", f"抽籤種子 {p['seed']}(= 抽籤日 {p['draw_date']}),"
-                        f"從當時投資範圍等機率抽 {RANDOM_N} 檔。"
-                        "此帳戶永不重抽、不設濾網、不再平衡——"
-                        "它的用途是回答「整套主動流程有沒有贏過丟一次飛鏢然後睡覺」。"]
+                        f"從 {p.get('pool_size', '約1100')} 檔上市普通股等機率盲抽 "
+                        f"{RANDOM_N} 檔,**不設任何市值或流動性篩選**。"]
+            if no_px:
+                ranking.append(f"註:{len(no_px)} 檔無報價(冷門股),未建倉。")
+            ranking += ["此帳戶永不重抽、不設濾網、不再平衡——它回答的是"
+                        "「在台股裡閉眼睛丟飛鏢，然後睡覺，會發生什麼事」。",
+                        "警語:小型股流動性差,本帳戶以收盤價成交,實際執行的滑價會更差。"]
         else:
             raise ValueError(f"未定義的帳戶類型: {acct['key']}")
 
