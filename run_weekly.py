@@ -10,6 +10,7 @@
 """
 import json
 import os
+import random
 from datetime import datetime
 
 import numpy as np
@@ -23,18 +24,17 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 REPORT_DIR = os.path.join(BASE, "reports")
 
 ALL_TICKERS = list(config.UNIVERSE) + [config.BENCHMARK]
+RANDOM_N = 10          # 對照組:一次性隨機抽幾檔
 
 ACCOUNTS = [
     {"key": "momentum", "name": "帳戶一:純動能",
      "pf": "portfolio.json", "trades": "trades.csv",
      "desc": "近 60 日報酬率前 5 名,等權重"},
-    {"key": "hybrid", "name": "帳戶二:動能+營收",
-     "pf": "portfolio_hybrid.json", "trades": "trades_hybrid.csv",
-     "desc": "動能與月營收年增率各半的綜合排名前 5 名,等權重"},
-    {"key": "margin", "name": "帳戶三:動能+毛利",
-     "pf": "portfolio_margin.json", "trades": "trades_margin.csv",
-     "desc": "動能與毛利率年變化各半的綜合排名前 5 名,等權重"},
-    {"key": "us_etf", "name": "帳戶四:美股ETF",
+    {"key": "random", "name": "帳戶二:隨機選股(對照組)",
+     "pf": "portfolio_random.json", "trades": "trades_random.csv",
+     "desc": "成立時一次性隨機抽 10 檔、等權重、買進持有,永不重抽也不設濾網"
+             "(亂數種子固定並記錄於帳戶檔,任何人可重現)"},
+    {"key": "us_etf", "name": "帳戶三:美股ETF",
      "pf": "portfolio_us.json", "trades": "trades_us.csv",
      "desc": "SPY 50%/QQQ 30%/VIG 20% 被動持有(台幣計價),偏離目標逾 5 個百分點才再平衡"},
 ]
@@ -137,12 +137,17 @@ def rebalance(p, px, targets, reason_fn, today, weights=None):
                     and abs(diff) < target_val * 0.20):
                 continue
             min_trade = px[t] * (0.001 if frac else 1)
-            if diff > min_trade:                  # 買進/加碼
+            held = pos.get(t, {}).get("shares", 0)
+            # 初始建倉時,即使目標權重買不起 1 股也要買 1 股(高價股會略微超配),
+            # 否則像川湖(10,100/股)這種會被永久排除,留下大筆現金拖累
+            first_buy = (not frac) and held == 0 and diff > 0
+            if diff > min_trade or first_buy:
                 if frac:
                     buy_n = round(min(diff, p["cash"] / (1 + config.US_FEE_RATE)) / px[t], 4)
                 else:
                     affordable = int(p["cash"] / (px[t] * (1 + config.FEE_RATE)))
-                    buy_n = min(int(diff // px[t]), affordable)
+                    want = max(int(diff // px[t]), 1 if first_buy else 0)
+                    buy_n = min(want, affordable)
                 if buy_n > 0:
                     value = buy_n * px[t]
                     cost = trade_cost(value, is_sell=False, ticker=t)
@@ -217,7 +222,7 @@ def account_section(acct, p, trades, ranking_lines, px, mkt):
     pos = p["positions"]
     stock_value = sum(v["shares"] * px[t] for t, v in pos.items())
     nav = p["cash"] + stock_value
-    suffix = "" if acct["key"] == "us_etf" else " + 大盤濾網"
+    suffix = "" if acct["key"] in ("us_etf", "random") else " + 大盤濾網"
     lines = [f"# {acct['name']}", "", f"策略:{acct['desc']}{suffix}", ""]
 
     # 決策卡
@@ -306,27 +311,8 @@ def main():
     px = prices_all.iloc[-1]
     print(f"最新資料日: {prices_all.index[-1].strftime('%Y-%m-%d')}")
 
-    print("下載月營收資料...")
-    try:
-        from fundamentals import fetch_month_revenue, revenue_yoy_table
-        rev = fetch_month_revenue(list(config.UNIVERSE))
-        yoy_table = revenue_yoy_table(rev)
-        yoy_now = yoy_table.ffill().iloc[-1]
-    except Exception as e:                      # API 掛掉時退回純動能,不中斷
-        print(f"警告:月營收下載失敗({e}),帳戶二本週退回純動能訊號")
-        yoy_table = pd.DataFrame()
-        yoy_now = pd.Series(dtype=float)
-
-    print("下載季報資料(毛利率)...")
-    try:
-        from fundamentals import fetch_financials, margin_trend_table
-        fin = fetch_financials(list(config.UNIVERSE), start="2023-01-01")
-        gm_table = margin_trend_table(fin)
-        gm_now = gm_table.ffill().iloc[-1]
-    except Exception as e:
-        print(f"警告:季報下載失敗({e}),帳戶三本週退回純動能訊號")
-        gm_table = pd.DataFrame()
-        gm_now = pd.Series(dtype=float)
+    # 註:月營收與季報(毛利)資料的抓取已移除——動能+營收、動能+毛利兩個帳戶
+    # 於 2026-08 結案,現行三個帳戶皆不需要基本面資料。fundamentals.py 保留供回測使用。
 
     print("下載美股 ETF 資料(台幣計價)...")
     try:
@@ -409,30 +395,34 @@ def main():
                 star = " ★持有" if t in p["positions"] or t in targets else ""
                 ranking.append(f"|{i}|{zh_name(t)}({t.replace('.TW','')}){star}"
                                f"|{config.UNIVERSE[t][1]}|{sc:+.1%}|")
+        elif acct["key"] == "random":
+            # 對照組:成立時一次性抽籤,之後永不重抽、不設濾網、不再平衡
+            if not p.get("draw"):
+                seed = int(pd.Timestamp(today).strftime("%Y%m%d"))
+                pool = sorted(t for t in config.UNIVERSE
+                              if not np.isnan(px_all.get(t, np.nan)))
+                p["draw"] = sorted(random.Random(seed).sample(pool, RANDOM_N))
+                p["seed"] = seed
+                p["draw_date"] = today
+                print(f"{acct['name']}:一次性抽籤(種子 {seed}) → "
+                      f"{[zh_name(t) for t in p['draw']]}")
+            targets = [t for t in p["draw"] if not np.isnan(px_all.get(t, np.nan))]
+            hold = bool(p["positions"])          # 已建倉後永遠不動
+
+            def reason_fn(t):
+                return f"一次性隨機抽籤選中(種子 {p['seed']},{p['draw_date']} 抽出)"
+
+            ranking = ["|抽中的股票|產業|近60日報酬|", "|---|---|---|"]
+            for t in p["draw"]:
+                ranking.append(f"|{zh_name(t)}({t.replace('.TW','')})"
+                               f"|{config.UNIVERSE.get(t, ('', '—'))[1]}"
+                               f"|{mom_scores.get(t, float('nan')):+.1%}|")
+            ranking += ["", f"抽籤種子 {p['seed']}(= 抽籤日 {p['draw_date']}),"
+                        f"從當時投資範圍等機率抽 {RANDOM_N} 檔。"
+                        "此帳戶永不重抽、不設濾網、不再平衡——"
+                        "它的用途是回答「整套主動流程有沒有贏過丟一次飛鏢然後睡覺」。"]
         else:
-            table, now_vals, label = (
-                (yoy_table, yoy_now, "營收年增率(近3月均)")
-                if acct["key"] == "hybrid" else
-                (gm_table, gm_now, "毛利率年變化"))
-            targets = (strategy.combined_targets(prices, bench, table)
-                       if not table.empty and filter_on else
-                       (strategy.target_holdings(prices, bench) if filter_on else []))
-            scores = strategy.combined_scores(prices, table) \
-                if not table.empty else mom_scores
-
-            def reason_fn(t, s=scores, m=mom_scores, y=now_vals, lb=label):
-                r = list(s.index).index(t) + 1
-                return (f"綜合排名第 {r}(動能 {m.get(t, float('nan')):+.1%},"
-                        f"{lb} {y.get(t, float('nan')):+.1%})")
-
-            ranking = [f"|排名|股票|產業|近60日報酬|{label}|",
-                       "|---|---|---|---|---|"]
-            for i, t in enumerate(scores.head(10).index, 1):
-                star = " ★持有" if t in p["positions"] or t in targets else ""
-                ranking.append(f"|{i}|{zh_name(t)}({t.replace('.TW','')}){star}"
-                               f"|{config.UNIVERSE[t][1]}"
-                               f"|{mom_scores.get(t, float('nan')):+.1%}"
-                               f"|{now_vals.get(t, float('nan')):+.1%}|")
+            raise ValueError(f"未定義的帳戶類型: {acct['key']}")
 
         targets = [t for t in targets if not np.isnan(px_all.get(t, np.nan))]
         print(f"{acct['name']} 目標: {[zh_name(t) for t in targets] or '無(現金)'}"
