@@ -28,12 +28,7 @@ jobs:
       - name: 執行每週決策與週報
         run: python run_weekly.py
 
-      - name: 寄送週報 Email(未設定密鑰時自動跳過)
-        env:
-          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
-          MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
-        run: python scripts/send_report.py
-
+      # 先存檔再寄信:資料落地是主要任務,通知只是附屬
       - name: 提交結果回 repo
         run: |
           git config user.name "ai-fund-bot"
@@ -41,3 +36,10 @@ jobs:
           git add portfolio/ reports/
           git diff --cached --quiet || git commit -m "週報 $(date +%Y-%m-%d)"
           git push
+
+      - name: 寄送週報 Email(未設定密鑰時自動跳過)
+        continue-on-error: true      # 寄信是通知管道,失敗不該讓整個排程失敗
+        env:
+          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+          MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
+        run: python scripts/send_report.py

@@ -46,7 +46,20 @@ msg["Subject"] = f"AI 投資公司週報 {date}"
 msg["From"] = user
 msg["To"] = user
 
-with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=60) as s:
-    s.login(user, pw)
-    s.send_message(msg)
-print(f"週報 {date} 已寄出至 {user}")
+# Gmail 偶爾回 451/421 之類的暫時性錯誤,重試三次;
+# 全部失敗也只警告不中斷——報告已經產生並 commit,信只是通知管道。
+import time
+
+for attempt in range(1, 4):
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=60) as s:
+            s.login(user, pw)
+            s.send_message(msg)
+        print(f"週報 {date} 已寄出至 {user}")
+        break
+    except smtplib.SMTPException as e:
+        print(f"第 {attempt} 次寄送失敗: {e}")
+        if attempt < 3:
+            time.sleep(20 * attempt)
+        else:
+            print("警告:三次皆失敗,略過寄送(報告已產生並 commit,可至 repo 查看)")
