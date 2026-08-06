@@ -444,6 +444,20 @@ def main():
         p["nav_history"].append({"date": today, "nav": round(nav, 2),
                                  "bench": round(float(mkt["收盤"]), 2)})
         save_portfolio(acct, p)
+        if acct["key"] == "momentum":
+            mom_pf = p                      # 供蒙地卡羅對照使用
+
+    # --- 蒙地卡羅對照:純動能落在「隨機選股」分佈的第幾百分位 ---
+    try:
+        import montecarlo
+        mc = montecarlo.run(prices_all, mom_pf["inception"],
+                            navs["帳戶一:純動能"] / config.INITIAL_CASH - 1)
+        if mc:
+            print(f"蒙地卡羅:純動能落在隨機分佈第 {mc['pct']*100:.1f} 百分位"
+                  f"({mc['beat_by']*100:.1f}% 的隨機組合贏過它)")
+            all_lines += montecarlo.report_lines(mc) + ["---", ""]
+    except Exception as e:                  # 對照分析失敗不影響主流程
+        print(f"警告:蒙地卡羅對照計算失敗({e})")
 
     # --- 共用區塊:市場方向 / 產業近況 ---
     all_lines += [
