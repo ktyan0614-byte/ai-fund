@@ -149,19 +149,29 @@ def cost(v, sell):
 def simulate(decide_fn, warmup=130):
     week_ends = pd.Series(dates, index=dates).resample("W-FRI").last().dropna()
     week_ends = set(d for d in week_ends if dates.get_loc(d) >= warmup)
-    cash, shares, nav_rec = 100_000.0, {}, {}
+    cash, shares, nav_rec, delisted = 100_000.0, {}, {}, []
     start_i = min(dates.get_loc(d) for d in week_ends)
     for d in dates[start_i:]:
         p = px.loc[d]
         if d in week_ends:
             targets = [t for t in decide_fn(d) if not np.isnan(p.get(t, np.nan))]
+            # 持股已無報價(下市/合併/停牌)→ 以最後有效價變現,否則 nav 變 NaN、組合凍結
+            for t in list(shares):
+                if shares[t] > 0 and np.isnan(p.get(t, np.nan)):
+                    lastp = wide[t].loc[:d].dropna()
+                    v = shares[t] * (lastp.iloc[-1] if len(lastp) else 0)
+                    if v > 0:
+                        cash += v - cost(v, True)
+                    delisted.append(t)
+                    shares[t] = 0
             for t in list(shares):
                 if t not in targets and shares[t] > 0 and not np.isnan(p[t]):
                     v = shares[t] * p[t]
                     cash += v - cost(v, True)
                     shares[t] = 0
             if targets:
-                nav_now = cash + sum(n * p[t] for t, n in shares.items() if n > 0)
+                nav_now = cash + sum(n * p[t] for t, n in shares.items()
+                                     if n > 0 and not np.isnan(p[t]))
                 per = nav_now / len(targets)
                 for t in targets:
                     diff = per - shares.get(t, 0) * p[t]
@@ -174,6 +184,8 @@ def simulate(decide_fn, warmup=130):
                             cash -= v + cost(v, False)
         nav_rec[d] = cash + sum(n * p[t] for t, n in shares.items()
                                 if n > 0 and not np.isnan(p[t]))
+    if delisted:
+        print(f'    (期間 {len(delisted)} 次持股失去報價,已以最後有效價變現)')
     return pd.Series(nav_rec)
 
 
