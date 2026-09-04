@@ -1,7 +1,7 @@
 {
   "inception": "2026-07-13",
-  "as_of": "2026-08-28",
-  "cash": 490.07,
+  "as_of": "2026-09-04",
+  "cash": 3463.92,
   "positions": {
     "1303.TW": {
       "shares": 88,
@@ -11,17 +11,17 @@
       "shares": 2,
       "avg_cost": 8645.0
     },
-    "2887.TW": {
-      "shares": 422,
-      "avg_cost": 35.95
+    "6669.TW": {
+      "shares": 7,
+      "avg_cost": 2565.0
     },
-    "2408.TW": {
-      "shares": 34,
-      "avg_cost": 512.0
+    "6505.TW": {
+      "shares": 232,
+      "avg_cost": 78.1
     },
-    "8046.TW": {
-      "shares": 8,
-      "avg_cost": 1295.0
+    "3017.TW": {
+      "shares": 1,
+      "avg_cost": 3570.0
     }
   },
   "nav_history": [
@@ -89,6 +89,11 @@
       "date": "2026-08-28",
       "nav": 93684.67,
       "bench": 105.9
+    },
+    {
+      "date": "2026-09-04",
+      "nav": 90672.12,
+      "bench": 107.9
     }
   ]
 }
